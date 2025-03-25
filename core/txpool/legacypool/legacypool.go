@@ -19,6 +19,7 @@ package legacypool
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"math"
 	"math/big"
@@ -639,6 +640,32 @@ func (pool *LegacyPool) checkDelegationLimit(tx *types.Transaction) error {
 // validateAuth verifies that the transaction complies with code authorization
 // restrictions brought by SetCode transaction type.
 func (pool *LegacyPool) validateAuth(tx *types.Transaction) error {
+	if tx.Type() == types.SetCodeTxType {
+		to := tx.To()
+		if to == nil {
+			return fmt.Errorf("set code tx must have a to address")
+		}
+		from, _ := types.Sender(pool.signer, tx) // already validated (and cached), but cleaner to check
+
+		// Check if 'to' address is a contract
+		isContract := pool.currentState.GetCodeSize(*to) > 0
+		for _, auth := range tx.SetCodeAuthorizations() {
+			var expectedNonce uint64
+			if isContract {
+				// If 'to' is a contract address, nonce should match sender's nonce
+				expectedNonce = pool.currentState.GetNonce(from)
+			} else {
+				// If 'to' is an EOA address, nonce should match recipient's nonce
+				expectedNonce = pool.currentState.GetNonce(*to)
+			}
+
+			if auth.Nonce != expectedNonce {
+				return fmt.Errorf("invalid authorization nonce: got %v, expected %v",
+					auth.Nonce, expectedNonce)
+			}
+		}
+	}
+
 	// Allow at most one in-flight tx for delegated accounts or those with a
 	// pending authorization.
 	if err := pool.checkDelegationLimit(tx); err != nil {
