@@ -18,14 +18,15 @@ package snapshot
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
-	"golang.org/x/exp/slices"
 )
 
-// weightedIterator is a iterator with an assigned weight. It is used to prioritise
+// weightedIterator is an iterator with an assigned weight. It is used to prioritise
 // which account or storage slot is the correct one if multiple iterators find the
 // same one (modified in multiple consecutive blocks).
 type weightedIterator struct {
@@ -33,19 +34,19 @@ type weightedIterator struct {
 	priority int
 }
 
-func (it *weightedIterator) Less(other *weightedIterator) bool {
+func (it *weightedIterator) Cmp(other *weightedIterator) int {
 	// Order the iterators primarily by the account hashes
 	hashI := it.it.Hash()
 	hashJ := other.it.Hash()
 
 	switch bytes.Compare(hashI[:], hashJ[:]) {
 	case -1:
-		return true
+		return -1
 	case 1:
-		return false
+		return 1
 	}
 	// Same account/storage-slot in multiple layers, split by priority
-	return it.priority < other.priority
+	return cmp.Compare(it.priority, other.priority)
 }
 
 // fastIterator is a more optimized multi-layer iterator which maintains a
@@ -84,18 +85,10 @@ func newFastIterator(tree *Tree, root common.Hash, account common.Hash, seek com
 				priority: depth,
 			})
 		} else {
-			// If the whole storage is destructed in this layer, don't
-			// bother deeper layer anymore. But we should still keep
-			// the iterator for this layer, since the iterator can contain
-			// some valid slots which belongs to the re-created account.
-			it, destructed := current.StorageIterator(account, seek)
 			fi.iterators = append(fi.iterators, &weightedIterator{
-				it:       it,
+				it:       current.StorageIterator(account, seek),
 				priority: depth,
 			})
-			if destructed {
-				break
-			}
 		}
 		current = current.Parent()
 	}
@@ -155,9 +148,7 @@ func (fi *fastIterator) init() {
 		}
 	}
 	// Re-sort the entire list
-	slices.SortFunc(fi.iterators, func(a, b *weightedIterator) bool {
-		return a.Less(b)
-	})
+	slices.SortFunc(fi.iterators, func(a, b *weightedIterator) int { return a.Cmp(b) })
 	fi.initiated = false
 }
 
